@@ -7,6 +7,7 @@ from shaded.services.user_store import init_db
 EXTENSIONS = [
     "shaded.cogs.ping",
     "shaded.cogs.pubg",
+    "shaded.cogs.moderation",
 ]
 
 
