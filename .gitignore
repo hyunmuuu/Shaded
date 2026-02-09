@@ -1,0 +1,19 @@
+.DS_Store
+
+# venv
+.venv/
+
+# env
+.env
+.env.*
+
+# db
+data/
+*.db
+
+# python cache
+__pycache__/
+*.pyc
+
+# vscode
+.vscode/
