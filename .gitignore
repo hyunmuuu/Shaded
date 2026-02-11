@@ -7,9 +7,8 @@
 .env
 .env.*
 
-# db
-data/
-*.db
+# tools
+
 
 # python cache
 __pycache__/
@@ -20,3 +19,4 @@ __pycache__/
 
 # local sqlite db
 db/*.db
+tools/_debug/

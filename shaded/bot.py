@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from .config import Settings
 from shaded.services.user_store import init_db
+from shaded.services.clan_store import init_clan_tables 
 
 
 EXTENSIONS = [
@@ -26,6 +27,7 @@ class ShadedBot(commands.Bot):
             await self.load_extension(ext)
 
         await init_db(self.settings.db_path)
+        await init_clan_tables(self.settings.db_path)
 
         if self.settings.guild_id:
             guild = discord.Object(id=self.settings.guild_id)

@@ -65,3 +65,10 @@ class PubgApiClient:
         # /players/{playerId}/seasons/{seasonId}/ranked
         data, _ = await self._get(f"/players/{player_id}/seasons/{season_id}/ranked")
         return data
+
+    async def get_player(self, player_name: str) -> Dict[str, Any]:
+        data, _ = await self._get("/players", params={"filter[playerNames]": player_name})
+        items = data.get("data") or []
+        if not items:
+            raise PubgApiError(f"플레이어를 찾지 못함: {player_name}")
+        return items[0]

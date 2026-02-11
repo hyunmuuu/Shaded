@@ -1,11 +1,13 @@
 import discord
+import aiohttp
 from discord import app_commands
 from discord.ext import commands
 
 from shaded.services.pubg_stats import PubgStatsService
-from shaded.services.pubg_api import PubgApiError
+from shaded.services.pubg_api import PubgApiClient, PubgApiError
 from shaded.ui.embeds import normal_embed, ranked_embed
 from shaded.services.user_store import get_pubg_nickname, set_pubg_nickname
+from shaded.services.clan_store import register_member
 
 KIND_CHOICES = [
     app_commands.Choice(name="일반", value="normal"),
@@ -22,6 +24,15 @@ VIEW_CHOICES = [
     app_commands.Choice(name="TPP", value="tpp"),
     app_commands.Choice(name="FPP", value="fpp"),
 ]
+
+def _can_register(interaction: discord.Interaction, settings) -> bool:
+    allowed = getattr(settings, "register_role_ids", set())
+    if not allowed:
+        return True
+    if not isinstance(interaction.user, discord.Member):
+        return False
+    user_roles = {r.id for r in interaction.user.roles}
+    return len(user_roles & allowed) > 0
 
 class PubgCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -143,6 +154,62 @@ class PubgCog(commands.Cog):
 
         except PubgApiError as e:
             await interaction.followup.send(f"전적 조회 실패: {e}")
+        
+    @app_commands.command(name="등록", description="Shaded 주간랭킹 집계에 등록")
+    @app_commands.describe(nickname="PUBG 닉네임(steam)")
+    async def register_cmd(self, interaction: discord.Interaction, nickname: str):
+        settings = self.bot.settings
+
+        if not _can_register(interaction, settings):
+            await interaction.response.send_message(
+                "등록 권한이 없어. (서버에서 지정한 역할이 필요함)",
+                ephemeral=True,
+            )
+            return
+
+        if not settings.pubg_api_key or not settings.pubg_clan_id:
+            await interaction.response.send_message(
+                "서버 설정에 PUBG_API_KEY 또는 PUBG_CLAN_ID가 비어있음",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                client = PubgApiClient(settings.pubg_api_key, settings.pubg_shard, session)
+                p = await client.get_player(nickname)
+
+            account_id = p.get("id")
+            attrs = p.get("attributes") or {}
+            player_name = attrs.get("name") or nickname
+            clan_id = attrs.get("clanId")
+
+            if clan_id != settings.pubg_clan_id:
+                await interaction.followup.send(
+                    f"`{player_name}`는 Shaded 클랜 소속이 아니라 등록이 막혔어.\n"
+                    f"(player.clanId={clan_id})",
+                    ephemeral=True,
+                )
+                return
+
+            await register_member(
+                settings.db_path,
+                interaction.user.id,
+                settings.pubg_shard,
+                account_id,
+                player_name,
+            )
+
+            await interaction.followup.send(
+                f"등록 완료 ✅\n- PUBG: `{player_name}`\n- account_id: `{account_id}`",
+                ephemeral=True,
+            )
+
+        except PubgApiError as e:
+            await interaction.followup.send(f"등록 실패: {e}", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PubgCog(bot))
