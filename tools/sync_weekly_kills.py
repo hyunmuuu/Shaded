@@ -13,7 +13,10 @@ load_dotenv(override=True)
 
 from shaded.services.pubg_api import PubgApiClient, PubgApiError
 from shaded.utils.time_window import last_week_window_utc
-from shaded.services.sync_state import set_weekly_sync_last_utc_z
+from shaded.services.sync_state import (
+    set_weekly_sync_last_utc_z,
+    set_weekly_sync_last_error,
+)
 from shaded.services.clan_store import CLAN_ID_ALIAS
 from shaded.services.sqlite_conn import open_db_sync
 
@@ -22,16 +25,14 @@ DB_PATH = Path(os.getenv("DB_PATH", "db/shaded.db"))
 SHARD = os.getenv("PUBG_SHARD", "steam").strip() or "steam"
 API_KEY = (os.getenv("PUBG_API_KEY", "") or "").strip().removeprefix("Bearer ").strip()
 
-
 # 집계 대상 6모드(솔/듀/스쿼드 + FPP 3개)
 ALLOWED_MODES = {"solo", "duo", "squad", "solo-fpp", "duo-fpp", "squad-fpp"}
 
-
-# DB 안정화 패치
-BUSY_TIMEOUT_SEC = float(os.getenv("SQLITE_BUSY_TIMEOUT_SEC", "5"))  # 잠김 대기(초)
-JOB_LOCK_TTL_SEC = int(os.getenv("SYNC_JOB_LOCK_TTL_SEC", "1800"))   # 30분
+# DB 안정화(기본값은 .env로 조절 가능)
+BUSY_TIMEOUT_SEC = float(os.getenv("SQLITE_BUSY_TIMEOUT_SEC", "8"))
+JOB_LOCK_TTL_SEC = int(os.getenv("SYNC_JOB_LOCK_TTL_SEC", "1800"))
 JOB_NAME = "sync_weekly_kills"
-WRITE_BATCH_SIZE = 25  # 네트워크는 밖에서, DB는 짧게 잡기
+WRITE_BATCH_SIZE = int(os.getenv("SYNC_WRITE_BATCH_SIZE", "25"))
 
 
 def _to_z(dt_utc: datetime) -> str:
@@ -78,75 +79,64 @@ def _extract_participant_kills(match_json: Dict[str, Any], clan_ids: Set[str]) -
 
 
 def _ensure_tables(con) -> None:
-    """tools 스크립트만 돌려도 최소 테이블이 존재하도록 안전장치."""
+    """sync에 필요한 테이블만 보장. (clan_members/players 스키마는 건드리지 않음)"""
     con.execute("PRAGMA foreign_keys=ON;")
 
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS matches (
-          match_id        TEXT PRIMARY KEY,
-          platform        TEXT NOT NULL,
-          created_at_utc  TEXT NOT NULL,
-          game_mode       TEXT,
-          is_ranked       INTEGER NOT NULL DEFAULT 0,
-          inserted_at_utc TEXT NOT NULL DEFAULT (datetime('now')),
-          is_custom_match INTEGER NOT NULL DEFAULT 0,
-          is_casual       INTEGER NOT NULL DEFAULT 0
-        )
-        """
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS matches (
+      match_id        TEXT PRIMARY KEY,
+      platform        TEXT NOT NULL,
+      created_at_utc  TEXT NOT NULL,
+      game_mode       TEXT,
+      is_ranked       INTEGER NOT NULL DEFAULT 0,
+      inserted_at_utc TEXT NOT NULL DEFAULT (datetime('now')),
+      is_custom_match INTEGER NOT NULL DEFAULT 0,
+      is_casual       INTEGER NOT NULL DEFAULT 0
     )
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS player_matches (
-          match_id        TEXT NOT NULL,
-          platform        TEXT NOT NULL,
-          account_id      TEXT NOT NULL,
-          kills           INTEGER NOT NULL DEFAULT 0,
-          inserted_at_utc TEXT NOT NULL DEFAULT (datetime('now')),
-          PRIMARY KEY (match_id, platform, account_id),
-          FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
-        )
-        """
-    )
-    con.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_matches_time_flags
-        ON matches(created_at_utc, is_ranked, is_casual, is_custom_match)
-        """
-    )
-    con.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_player_matches_player
-        ON player_matches(platform, account_id)
-        """
-    )
+    """)
 
-    # sync_state 테이블(마지막 갱신 시각)
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS sync_state (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        )
-        """
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS player_matches (
+      match_id        TEXT NOT NULL,
+      platform        TEXT NOT NULL,
+      account_id      TEXT NOT NULL,
+      kills           INTEGER NOT NULL DEFAULT 0,
+      inserted_at_utc TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (match_id, platform, account_id),
+      FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
     )
+    """)
 
-    # job_lock (중복 실행 방지)
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS job_lock (
-          job_name     TEXT PRIMARY KEY,
-          locked_until INTEGER NOT NULL,
-          locked_by    TEXT,
-          updated_at   INTEGER NOT NULL
-        )
-        """
+    con.execute("""
+    CREATE INDEX IF NOT EXISTS idx_matches_time_flags
+    ON matches(created_at_utc, is_ranked, is_casual, is_custom_match)
+    """)
+
+    con.execute("""
+    CREATE INDEX IF NOT EXISTS idx_player_matches_player
+    ON player_matches(platform, account_id)
+    """)
+
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS sync_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
     )
+    """)
+
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS job_lock (
+      job_name     TEXT PRIMARY KEY,
+      locked_until INTEGER NOT NULL,
+      locked_by    TEXT,
+      updated_at   INTEGER NOT NULL
+    )
+    """)
 
 
 def _get_active_clan_members(con) -> List[Tuple[str, str]]:
-    """return [(account_id, player_name), ...]"""
+    """현재 스키마(clan_members + players) 기준으로 활성 멤버 조회"""
     rows = con.execute(
         """
         SELECT cm.account_id, p.player_name
@@ -184,7 +174,6 @@ def _insert_match_and_kills(
     is_casual: int,
     rows: List[Tuple[str, str, int]],
 ) -> None:
-    # match
     con.execute(
         """
         INSERT OR IGNORE INTO matches (
@@ -194,7 +183,7 @@ def _insert_match_and_kills(
         (match_id, SHARD, created_at_utc, game_mode, is_ranked, is_custom_match, is_casual),
     )
 
-    # players 이름 최신화
+    # 이름은 최신값으로 업데이트
     for account_id, player_name, _kills in rows:
         con.execute(
             """
@@ -205,7 +194,6 @@ def _insert_match_and_kills(
             (player_name, SHARD, account_id),
         )
 
-    # kills
     con.executemany(
         """
         INSERT OR REPLACE INTO player_matches (match_id, platform, account_id, kills)
@@ -216,7 +204,6 @@ def _insert_match_and_kills(
 
 
 def _try_acquire_job_lock(con, job_name: str, locked_by: str, ttl_sec: int) -> Tuple[bool, int]:
-    """(acquired, locked_until_epoch)"""
     now = int(time.time())
     until = now + int(ttl_sec)
 
@@ -249,7 +236,6 @@ def _try_acquire_job_lock(con, job_name: str, locked_by: str, ttl_sec: int) -> T
         locked_until = int(row[0]) if row else 0
         con.commit()
         return False, locked_until
-
     except Exception:
         con.rollback()
         raise
@@ -270,12 +256,6 @@ def _release_job_lock(con, job_name: str, locked_by: str) -> None:
         con.commit()
     except Exception:
         con.rollback()
-
-
-def _fmt_epoch_z(epoch: int) -> str:
-    if not epoch:
-        return ""
-    return _to_z(datetime.fromtimestamp(epoch, tz=timezone.utc))
 
 
 def _flush_pending(con, pending: List[Tuple[str, str, str, int, int, int, List[Tuple[str, str, int]]]]) -> None:
@@ -300,7 +280,7 @@ def _flush_pending(con, pending: List[Tuple[str, str, str, int, int, int, List[T
         raise
 
 
-async def main():
+async def main() -> None:
     if not API_KEY:
         raise SystemExit("PUBG_API_KEY 환경변수가 비어있음 (.env 또는 환경변수 설정 필요)")
     if not DB_PATH.exists():
@@ -314,19 +294,20 @@ async def main():
 
         acquired, locked_until = _try_acquire_job_lock(con, JOB_NAME, locked_by, JOB_LOCK_TTL_SEC)
         if not acquired:
-            print(f"[SKIP] already running: job={JOB_NAME} locked_until={_fmt_epoch_z(locked_until)}")
+            print(f"[SKIP] already running: job={JOB_NAME} locked_until={locked_until}", flush=True)
             return
 
         members = _get_active_clan_members(con)
         if not members:
-            raise SystemExit("clan_members에 활성 멤버가 없음. 먼저 멤버 등록/동기화 필요.")
+            raise SystemExit("clan_members에 활성 멤버가 없음. 먼저 /등록으로 멤버를 추가해줘.")
 
         clan_ids = {aid for (aid, _nm) in members}
 
+        # 보관 정책: 지난주 시작(UTC)보다 오래된 매치는 삭제
         last_w = last_week_window_utc()
         keep_from_utc = last_w.start_utc_z
 
-        # 1) 플레이어 10명 배치 조회(C안): 여기만 10RPM 준수
+        # 1) 플레이어 10명씩 배치로 최근 match 목록 수집 (10RPM 준수)
         all_recent_match_ids: Set[str] = set()
         async with aiohttp.ClientSession() as session:
             client = PubgApiClient(API_KEY, SHARD, session, rpm=10, max_retries=3)
@@ -341,16 +322,16 @@ async def main():
                         if mid:
                             all_recent_match_ids.add(mid)
 
-        # 2) 이미 저장한 매치는 제외
+        # 2) 이미 DB에 있는 매치는 제외
         candidates = list(all_recent_match_ids)
         exist = _existing_match_ids(con, candidates)
         new_match_ids = [mid for mid in candidates if mid not in exist]
 
         inserted = 0
         skipped_old = 0
-
-        # 3) /matches는 카운트 대상이 아니라서 빠르게(불필요 sleep 줄이기)
         pending: List[Tuple[str, str, str, int, int, int, List[Tuple[str, str, int]]]] = []
+
+        # 3) 새 매치만 상세(/matches) 조회 후 저장
         async with aiohttp.ClientSession() as session:
             match_client = PubgApiClient(API_KEY, SHARD, session, rpm=600, max_retries=2)
 
@@ -358,7 +339,7 @@ async def main():
                 try:
                     mj, _ = await match_client._get(f"/matches/{mid}")
                 except PubgApiError as e:
-                    print(f"[WARN] match fetch failed: {mid} {e}")
+                    print(f"[WARN] match fetch failed: {mid} {e}", flush=True)
                     continue
 
                 data = mj.get("data") or {}
@@ -394,7 +375,7 @@ async def main():
             inserted += len(pending)
             pending.clear()
 
-        # 4) 오래된 매치 정리(짧게)
+        # 4) 오래된 매치 정리(지난주 시작 이전 전부 삭제)
         con.execute("BEGIN IMMEDIATE;")
         try:
             con.execute("DELETE FROM matches WHERE created_at_utc < ?", (keep_from_utc,))
@@ -403,16 +384,17 @@ async def main():
             con.rollback()
             raise
 
-        # 5) 마지막 갱신 시각 저장
+        # 5) 마지막 갱신/에러 상태 기록
         await set_weekly_sync_last_utc_z(str(DB_PATH), _to_z(datetime.now(timezone.utc)))
+        await set_weekly_sync_last_error(str(DB_PATH), "")
 
         print(
             f"[OK] members={len(members)} new_matches={len(new_match_ids)} inserted={inserted} "
-            f"skipped_old={skipped_old} keep_from={keep_from_utc}"
+            f"skipped_old={skipped_old} keep_from={keep_from_utc}",
+            flush=True,
         )
 
     finally:
-        # lock은 무조건 해제(강제 종료면 TTL로 풀림, Ctrl+C면 여기서 해제됨)
         try:
             _release_job_lock(con, JOB_NAME, locked_by)
         finally:
@@ -426,4 +408,9 @@ if __name__ == "__main__":
         print("[STOP] cancelled by user", flush=True)
     except asyncio.CancelledError:
         print("[STOP] cancelled", flush=True)
-
+    except Exception as e:
+        try:
+            asyncio.run(set_weekly_sync_last_error(str(DB_PATH), f"{type(e).__name__}: {e}"))
+        except Exception:
+            pass
+        raise

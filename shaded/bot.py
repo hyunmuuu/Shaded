@@ -10,6 +10,7 @@ EXTENSIONS = [
     "shaded.cogs.pubg",
     "shaded.cogs.moderation",
     "shaded.cogs.leaderboard",
+    "shaded.cogs.status",
 ]
 
 
