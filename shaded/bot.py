@@ -11,6 +11,7 @@ EXTENSIONS = [
     "shaded.cogs.moderation",
     "shaded.cogs.leaderboard",
     "shaded.cogs.status",
+    "shaded.cogs.sync_now",
 ]
 
 
