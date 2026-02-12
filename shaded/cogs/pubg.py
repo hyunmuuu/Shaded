@@ -7,7 +7,7 @@ from shaded.services.pubg_stats import PubgStatsService
 from shaded.services.pubg_api import PubgApiClient, PubgApiError
 from shaded.ui.embeds import normal_embed, ranked_embed
 from shaded.services.user_store import get_pubg_nickname, set_pubg_nickname
-from shaded.services.clan_store import register_member
+from shaded.services.clan_store import upsert_clan_member, deactivate_clan_member, find_active_member_account_id
 
 KIND_CHOICES = [
     app_commands.Choice(name="일반", value="normal"),
@@ -90,7 +90,7 @@ class PubgCog(commands.Cog):
         nickname = await get_pubg_nickname(self._db_path(), interaction.user.id)
         if not nickname:
             await interaction.response.send_message(
-                "먼저 `/배그등록 닉네임`으로 본인 닉네임을 등록해줘.",
+                "먼저 `/아이디등록 닉네임`으로 본인 닉네임을 등록해줘.",
                 ephemeral=True,
             )
             return
@@ -155,7 +155,7 @@ class PubgCog(commands.Cog):
         except PubgApiError as e:
             await interaction.followup.send(f"전적 조회 실패: {e}")
         
-    @app_commands.command(name="등록", description="Shaded 주간랭킹 집계에 등록")
+    @app_commands.command(name="등록", description="주간랭킹 집계(클랜 목록)에 등록")
     @app_commands.describe(nickname="PUBG 닉네임(steam)")
     async def register_cmd(self, interaction: discord.Interaction, nickname: str):
         settings = self.bot.settings
@@ -167,9 +167,9 @@ class PubgCog(commands.Cog):
             )
             return
 
-        if not settings.pubg_api_key or not settings.pubg_clan_id:
+        if not settings.pubg_api_key:
             await interaction.response.send_message(
-                "서버 설정에 PUBG_API_KEY 또는 PUBG_CLAN_ID가 비어있음",
+                "서버 설정에 PUBG_API_KEY가 비어있음",
                 ephemeral=True,
             )
             return
@@ -184,23 +184,7 @@ class PubgCog(commands.Cog):
             account_id = p.get("id")
             attrs = p.get("attributes") or {}
             player_name = attrs.get("name") or nickname
-            clan_id = attrs.get("clanId")
-
-            if clan_id != settings.pubg_clan_id:
-                await interaction.followup.send(
-                    f"`{player_name}`는 Shaded 클랜 소속이 아니라 등록이 막혔어.\n"
-                    f"(player.clanId={clan_id})",
-                    ephemeral=True,
-                )
-                return
-
-            await register_member(
-                settings.db_path,
-                interaction.user.id,
-                settings.pubg_shard,
-                account_id,
-                player_name,
-            )
+            await upsert_clan_member(settings.db_path, settings.pubg_shard, account_id, player_name)
 
             await interaction.followup.send(
                 f"등록 완료 ✅\n- PUBG: `{player_name}`\n- account_id: `{account_id}`",
@@ -209,6 +193,57 @@ class PubgCog(commands.Cog):
 
         except PubgApiError as e:
             await interaction.followup.send(f"등록 실패: {e}", ephemeral=True)
+
+    @app_commands.command(name="등록해제", description="주간랭킹 집계(클랜 목록)에서 제거")
+    @app_commands.describe(nickname="PUBG 닉네임(steam)")
+    async def unregister_cmd(self, interaction: discord.Interaction, nickname: str):
+        settings = self.bot.settings
+
+        if not _can_register(interaction, settings):
+            await interaction.response.send_message(
+                "등록 권한이 없어. (서버에서 지정한 역할이 필요함)",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # 1) DB에 이미 등록된 이름이면 DB로 먼저 찾기(추가 API 호출 줄이기)
+        account_id = await find_active_member_account_id(settings.db_path, settings.pubg_shard, nickname)
+
+        # 2) DB에서 못 찾으면 API로 account_id를 알아낸 뒤 해제
+        player_name = nickname
+        if not account_id:
+            if not settings.pubg_api_key:
+                await interaction.followup.send("서버 설정에 PUBG_API_KEY가 비어있음", ephemeral=True)
+                return
+            try:
+                async with aiohttp.ClientSession() as session:
+                    client = PubgApiClient(settings.pubg_api_key, settings.pubg_shard, session)
+                    p = await client.get_player(nickname)
+                account_id = p.get("id")
+                attrs = p.get("attributes") or {}
+                player_name = attrs.get("name") or nickname
+            except PubgApiError as e:
+                await interaction.followup.send(f"해제 실패(조회): {e}", ephemeral=True)
+                return
+
+        if not account_id:
+            await interaction.followup.send("해제 실패: account_id를 찾지 못함", ephemeral=True)
+            return
+
+        rows = await deactivate_clan_member(settings.db_path, settings.pubg_shard, account_id)
+        if rows <= 0:
+            await interaction.followup.send(
+                f"이미 해제되어 있거나 등록되지 않은 멤버야: `{player_name}`",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            f"등록해제 완료 ✅\n- PUBG: `{player_name}`\n- account_id: `{account_id}`",
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):

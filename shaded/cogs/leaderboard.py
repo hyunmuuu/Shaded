@@ -8,6 +8,19 @@ from shaded.config import Settings
 from shaded.utils.time_window import week_window_utc, last_week_window_utc
 from shaded.services.leaderboard_store import fetch_weekly_leaderboard
 from shaded.services.clan_store import CLAN_ID_ALIAS
+from shaded.services.sync_state import get_weekly_sync_last_utc_z
+from datetime import datetime, timezone, timedelta
+
+KST = timezone(timedelta(hours=9))
+
+def _fmt_last_sync_kst(utc_z: str | None) -> str:
+    if not utc_z:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(utc_z.replace('Z', '+00:00')).astimezone(KST)
+        return dt.strftime('%Y-%m-%d %H:%M')
+    except Exception:
+        return "-"
 
 
 SCOPE_CHOICES = [
@@ -57,6 +70,9 @@ async def _send_board(
         title=f"{title_prefix} · {label}",
         description=f"기간: **{start_kst_str} ~ {end_kst_str} (KST)**\n집계: {_scope_desc(scope)}",
     )
+
+    last_sync_utc_z = await get_weekly_sync_last_utc_z(settings.db_path)
+    embed.set_footer(text=f"마지막 갱신: {_fmt_last_sync_kst(last_sync_utc_z)} (KST)")
 
     if not rows:
         embed.add_field(name="결과", value="데이터 없음", inline=False)

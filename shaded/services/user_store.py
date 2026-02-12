@@ -4,6 +4,8 @@ from typing import Optional
 import time
 import aiosqlite
 
+from shaded.services.sync_state import init_sync_state
+
 async def init_db(db_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(db_path) as db:
@@ -17,6 +19,10 @@ async def init_db(db_path: str) -> None:
             """
         )
         await db.commit()
+
+    # sync_state(마지막 갱신 시각 저장용)
+    await init_sync_state(db_path)
+
 
 async def set_pubg_nickname(db_path: str, discord_id: int, nickname: str) -> None:
     nick = nickname.strip()
