@@ -2,13 +2,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 import time
-import aiosqlite
+from shaded.services.sqlite_conn import open_db
 
 from shaded.services.sync_state import init_sync_state
 
 async def init_db(db_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(db_path) as db:
+    async with open_db(db_path) as db:
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS pubg_user (
@@ -30,7 +30,7 @@ async def set_pubg_nickname(db_path: str, discord_id: int, nickname: str) -> Non
         raise ValueError("nickname is empty")
 
     now = int(time.time())
-    async with aiosqlite.connect(db_path) as db:
+    async with open_db(db_path) as db:
         await db.execute(
             """
             INSERT INTO pubg_user (discord_id, pubg_nickname, updated_at)
@@ -44,7 +44,7 @@ async def set_pubg_nickname(db_path: str, discord_id: int, nickname: str) -> Non
         await db.commit()
 
 async def get_pubg_nickname(db_path: str, discord_id: int) -> Optional[str]:
-    async with aiosqlite.connect(db_path) as db:
+    async with open_db(db_path) as db:
         cur = await db.execute(
             "SELECT pubg_nickname FROM pubg_user WHERE discord_id=?",
             (discord_id,),

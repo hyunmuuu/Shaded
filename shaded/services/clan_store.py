@@ -1,10 +1,11 @@
-import aiosqlite
 import time
+
+from shaded.services.sqlite_conn import open_db
 
 CLAN_ID_ALIAS = "shaded_steam"  # 너 프로젝트에서 쓰는 내부 클랜 키(고정)
 
 async def init_clan_tables(db_path: str) -> None:
-    async with aiosqlite.connect(db_path) as db:
+    async with open_db(db_path) as db:
         await db.execute("""
         CREATE TABLE IF NOT EXISTS players (
             platform TEXT NOT NULL,
@@ -39,7 +40,7 @@ async def init_clan_tables(db_path: str) -> None:
 
 async def register_member(db_path: str, discord_id: int, platform: str, account_id: str, player_name: str) -> None:
     now = int(time.time())
-    async with aiosqlite.connect(db_path) as db:
+    async with open_db(db_path) as db:
         await db.execute("BEGIN")
         await db.execute(
             """
@@ -90,7 +91,7 @@ async def upsert_clan_member(
     - 이미 있으면 이름/활성 상태만 갱신
     """
     now = int(time.time())
-    async with aiosqlite.connect(db_path) as db:
+    async with open_db(db_path) as db:
         await db.execute("BEGIN")
         await db.execute(
             """
@@ -118,7 +119,7 @@ async def upsert_clan_member(
 
 async def deactivate_clan_member(db_path: str, platform: str, account_id: str) -> int:
     """집계 대상에서 제거(비활성화). 반환값: 영향받은 row 수."""
-    async with aiosqlite.connect(db_path) as db:
+    async with open_db(db_path) as db:
         cur = await db.execute(
             """
             UPDATE clan_members
@@ -138,7 +139,7 @@ async def find_active_member_account_id(db_path: str, platform: str, player_name
     name = (player_name or "").strip()
     if not name:
         return None
-    async with aiosqlite.connect(db_path) as db:
+    async with open_db(db_path) as db:
         cur = await db.execute(
             """
             SELECT p.account_id

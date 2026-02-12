@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import aiosqlite
 
+from shaded.services.sqlite_conn import open_db
+
 # scope: "normal"(일반) | "ranked"(경쟁) | "total"(전체)
 SQL_WEEKLY = """
 SELECT
@@ -50,7 +52,7 @@ async def fetch_weekly_leaderboard(
 
     sql = SQL_WEEKLY.format(scope_clause=scope_clause)
 
-    async with aiosqlite.connect(db_path) as con:
+    async with open_db(db_path) as con:
         con.row_factory = aiosqlite.Row
         rows = await con.execute_fetchall(
             sql,

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import time
 from typing import Optional
-import aiosqlite
+from shaded.services.sqlite_conn import open_db
 
 
 STATE_KEY_WEEKLY_SYNC_UTC_Z = "weekly_sync_last_utc_z"
 
 
 async def init_sync_state(db_path: str) -> None:
-    async with aiosqlite.connect(db_path) as db:
+    async with open_db(db_path) as db:
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS sync_state (
@@ -24,7 +24,7 @@ async def init_sync_state(db_path: str) -> None:
 
 async def set_weekly_sync_last_utc_z(db_path: str, utc_z: str) -> None:
     now = int(time.time())
-    async with aiosqlite.connect(db_path) as db:
+    async with open_db(db_path) as db:
         await db.execute(
             """
             INSERT INTO sync_state (key, value, updated_at)
@@ -39,7 +39,7 @@ async def set_weekly_sync_last_utc_z(db_path: str, utc_z: str) -> None:
 
 
 async def get_weekly_sync_last_utc_z(db_path: str) -> Optional[str]:
-    async with aiosqlite.connect(db_path) as db:
+    async with open_db(db_path) as db:
         cur = await db.execute(
             "SELECT value FROM sync_state WHERE key=?",
             (STATE_KEY_WEEKLY_SYNC_UTC_Z,),
