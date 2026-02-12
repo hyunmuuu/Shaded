@@ -9,6 +9,7 @@ EXTENSIONS = [
     "shaded.cogs.ping",
     "shaded.cogs.pubg",
     "shaded.cogs.moderation",
+    "shaded.cogs.leaderboard",
 ]
 
 
@@ -36,9 +37,12 @@ class ShadedBot(commands.Bot):
             self.tree.copy_global_to(guild=guild)
 
             synced = await self.tree.sync(guild=guild)
-            print(f"[SYNC] guild={guild.id} commands={len(synced)}")
+            print(f"[SYNC] guild={guild.id} commands={len(synced)}", flush=True)
+
         else:
             synced = await self.tree.sync()
             print(f"[SYNC] global commands={len(synced)}")
             
-    
+    async def on_ready(self):
+        print(f"[READY] user={self.user} id={getattr(self.user, 'id', None)}", flush=True)
+        print(f"[READY] guilds={len(self.guilds)}", flush=True)

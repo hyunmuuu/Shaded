@@ -6,18 +6,33 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_DB_PATH = ROOT_DIR / "db" / "shaded.db"  # 너는 db/shaded.db 쓰기로 했으니 이걸 기본값으로
+DEFAULT_DB_PATH = ROOT_DIR / "db" / "shaded.db"
 
 def _parse_id_list(v: str) -> set[int]:
     v = (v or "").strip()
     if not v:
         return set()
-    out = set()
+    out: set[int] = set()
     for part in v.split(","):
         part = part.strip()
         if part.isdigit():
             out.add(int(part))
     return out
+
+def _resolve_db_path(v: str) -> str:
+    v = (v or "").strip()
+    if not v:
+        return str(DEFAULT_DB_PATH)
+    p = Path(v)
+    if p.is_absolute():
+        return str(p)
+    # ✅ 상대경로는 프로젝트 루트 기준으로 고정
+    return str((ROOT_DIR / p).resolve())
+
+def _clean_pubg_key(v: str) -> str:
+    v = (v or "").strip()
+    v = v.removeprefix("Bearer ").strip()
+    return v.strip('"').strip("'")
 
 @dataclass(frozen=True)
 class Settings:
@@ -29,16 +44,9 @@ class Settings:
     )
 
     # PUBG
-    pubg_api_key: str = (
-        os.getenv("PUBG_API_KEY", "")
-        .strip()
-        .removeprefix("Bearer ")
-        .strip()
-        .strip('"')
-        .strip("'")
-    )
+    pubg_api_key: str = _clean_pubg_key(os.getenv("PUBG_API_KEY", ""))
     pubg_shard: str = os.getenv("PUBG_SHARD", "steam").strip()
     pubg_clan_id: str = os.getenv("PUBG_CLAN_ID", "").strip()
 
     # DB
-    db_path: str = os.getenv("DB_PATH", str(DEFAULT_DB_PATH)).strip()
+    db_path: str = _resolve_db_path(os.getenv("DB_PATH", ""))

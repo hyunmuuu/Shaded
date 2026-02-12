@@ -1,22 +1,63 @@
+# =========================
+# OS / Editor
+# =========================
 .DS_Store
+Thumbs.db
+Desktop.ini
 
-# venv
+.vscode/
+.idea/
+*.code-workspace
+
+# =========================
+# Python caches / tooling
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.cache/
+
+.coverage
+htmlcov/
+*.log
+
+# =========================
+# Virtual environments
+# =========================
 .venv/
+venv/
+env/
 
-# env
+# =========================
+# Environment / secrets
+# =========================
 .env
 .env.*
+!.env.example
 
-# tools
+# =========================
+# Packaging / build outputs
+# =========================
+build/
+dist/
+*.egg-info/
+.eggs/
 
+# =========================
+# SQLite (keep schema/migrations as .sql)
+# =========================
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
 
-# python cache
-__pycache__/
-*.pyc
-
-# vscode
-.vscode/
-
-# local sqlite db
+# project-specific db location
 db/*.db
-tools/_debug/
+db/*.db-*
