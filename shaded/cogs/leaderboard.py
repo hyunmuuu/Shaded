@@ -6,12 +6,14 @@ from discord import app_commands
 
 from shaded.config import Settings
 from shaded.utils.time_window import week_window_utc, last_week_window_utc
-from shaded.services.leaderboard_store import fetch_weekly_leaderboard
+from shaded.services.leaderboard_store import fetch_weekly_leaderboard, fetch_weekly_snapshot
 from shaded.services.clan_store import CLAN_ID_ALIAS
 from shaded.services.sync_state import get_weekly_sync_last_utc_z
 from datetime import datetime, timezone, timedelta
 
+
 KST = timezone(timedelta(hours=9))
+
 
 def _fmt_last_sync_kst(utc_z: str | None) -> str:
     if not utc_z:
@@ -21,6 +23,18 @@ def _fmt_last_sync_kst(utc_z: str | None) -> str:
         return dt.strftime('%Y-%m-%d %H:%M')
     except Exception:
         return "-"
+
+
+def _fmt_snapshot_created_kst(created_at_utc: str | None) -> str | None:
+    if not created_at_utc:
+        return None
+    # sqlite datetime('now') -> 'YYYY-MM-DD HH:MM:SS' (UTC)
+    try:
+        dt = datetime.fromisoformat(created_at_utc.replace("Z", "").replace("T", " "))
+        dt = dt.replace(tzinfo=timezone.utc).astimezone(KST)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return None
 
 
 SCOPE_CHOICES = [
@@ -51,8 +65,11 @@ async def _send_board(
     end_utc_z: str,
     start_kst_str: str,
     end_kst_str: str,
+    rows_override: list[tuple[str, int]] | None = None,
+    snapshot: bool = False,
+    snapshot_created_at_utc: str | None = None,
 ):
-    rows = await fetch_weekly_leaderboard(
+    rows = rows_override if rows_override is not None else await fetch_weekly_leaderboard(
         db_path=settings.db_path,
         clan_id=CLAN_ID_ALIAS,         # ✅ DB는 alias로 고정
         platform=settings.pubg_shard,
@@ -62,13 +79,12 @@ async def _send_board(
         limit=10,
     )
 
-    # ✅ 디버그가 필요하면 여기 한 줄만 켜서 콘솔에서 rows 확인 가능
-    # print("[LEADERBOARD]", title_prefix, scope, start_utc_z, end_utc_z, rows)
-
     label = _scope_label(scope)
     embed = discord.Embed(
-        title=f"{title_prefix} · {label}",
-        description=f"기간: **{start_kst_str} ~ {end_kst_str} (KST)**\n집계: {_scope_desc(scope)}",
+        title=f"{title_prefix}{' (스냅샷)' if snapshot else ''} · {label}",
+        description=f"기간: **{start_kst_str} ~ {end_kst_str} (KST)**\n집계: {_scope_desc(scope)}"
+        + (f"\n스냅샷 생성: {_fmt_snapshot_created_kst(snapshot_created_at_utc)} (KST)" if snapshot and _fmt_snapshot_created_kst(snapshot_created_at_utc) else "")
+        + ("\n스냅샷: ✅ (지난 주 주간 종료 시점 기준)" if snapshot else ""),
     )
 
     last_sync_utc_z = await get_weekly_sync_last_utc_z(settings.db_path)
@@ -116,6 +132,17 @@ class LeaderboardCog(commands.Cog):
         scope: app_commands.Choice[str],
     ):
         w = last_week_window_utc()
+
+        # ✅ 스냅샷 우선 (없으면 기존처럼 실시간 집계)
+        snap_rows, snap_created = await fetch_weekly_snapshot(
+            db_path=self.settings.db_path,
+            clan_id=CLAN_ID_ALIAS,
+            platform=self.settings.pubg_shard,
+            week_start_utc_z=w.start_utc_z,
+            scope=scope.value,
+            limit=10,
+        )
+
         await _send_board(
             interaction=interaction,
             settings=self.settings,
@@ -125,6 +152,9 @@ class LeaderboardCog(commands.Cog):
             end_utc_z=w.end_utc_z,
             start_kst_str=w.start_kst.strftime("%Y-%m-%d %H:%M"),
             end_kst_str=w.end_kst.strftime("%Y-%m-%d %H:%M"),
+            rows_override=snap_rows if snap_created is not None else None,  # empty list여도 스냅샷이면 그대로 표시
+            snapshot=True if snap_created is not None else False,
+            snapshot_created_at_utc=snap_created,
         )
 
 

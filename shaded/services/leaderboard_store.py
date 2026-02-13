@@ -33,6 +33,33 @@ LIMIT :limit;
 """
 
 
+async def _fetchone(con: aiosqlite.Connection, sql: str, params: dict) -> aiosqlite.Row | None:
+    """
+    aiosqlite 버전/래퍼 차이로 execute_fetchone이 없을 수 있어서 호환 처리
+    """
+    if hasattr(con, "execute_fetchone"):
+        return await con.execute_fetchone(sql, params)  # type: ignore
+
+    cur = await con.execute(sql, params)
+    try:
+        row = await cur.fetchone()
+        return row
+    finally:
+        await cur.close()
+
+
+async def _fetchall(con: aiosqlite.Connection, sql: str, params: dict) -> list[aiosqlite.Row]:
+    if hasattr(con, "execute_fetchall"):
+        return await con.execute_fetchall(sql, params)  # type: ignore
+
+    cur = await con.execute(sql, params)
+    try:
+        rows = await cur.fetchall()
+        return list(rows)
+    finally:
+        await cur.close()
+
+
 async def fetch_weekly_leaderboard(
     db_path: str,
     clan_id: str,
@@ -54,7 +81,8 @@ async def fetch_weekly_leaderboard(
 
     async with open_db(db_path) as con:
         con.row_factory = aiosqlite.Row
-        rows = await con.execute_fetchall(
+        rows = await _fetchall(
+            con,
             sql,
             {
                 "clan_id": clan_id,
@@ -77,3 +105,115 @@ async def fetch_weekly_leaderboard_normal(
     limit: int = 10,
 ) -> list[tuple[str, int]]:
     return await fetch_weekly_leaderboard(db_path, clan_id, platform, start_utc_z, end_utc_z, "normal", limit)
+
+
+# =========================
+# weekly snapshot (지난랭킹 스냅샷)
+# =========================
+
+SNAPSHOT_META_SQL = """
+CREATE TABLE IF NOT EXISTS weekly_snapshot_meta (
+  clan_id        TEXT NOT NULL,
+  platform       TEXT NOT NULL,
+  week_start_utc TEXT NOT NULL,
+  week_end_utc   TEXT NOT NULL,
+  scope          TEXT NOT NULL,  -- normal|ranked|total
+  created_at_utc TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (clan_id, platform, week_start_utc, scope)
+);
+"""
+
+SNAPSHOT_ROWS_SQL = """
+CREATE TABLE IF NOT EXISTS weekly_snapshot_rows (
+  clan_id        TEXT NOT NULL,
+  platform       TEXT NOT NULL,
+  week_start_utc TEXT NOT NULL,
+  scope          TEXT NOT NULL,
+  rank           INTEGER NOT NULL,
+  player_name    TEXT NOT NULL,
+  kills          INTEGER NOT NULL,
+  PRIMARY KEY (clan_id, platform, week_start_utc, scope, rank)
+);
+"""
+
+SNAPSHOT_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_weekly_snapshot_rows_lookup
+ON weekly_snapshot_rows (clan_id, platform, week_start_utc, scope);
+"""
+
+SQL_SNAPSHOT_META = """
+SELECT week_end_utc, created_at_utc
+  FROM weekly_snapshot_meta
+ WHERE clan_id = :clan_id
+   AND platform = :platform
+   AND week_start_utc = :week_start_utc
+   AND scope = :scope
+ LIMIT 1;
+"""
+
+SQL_SNAPSHOT_ROWS = """
+SELECT player_name, kills
+  FROM weekly_snapshot_rows
+ WHERE clan_id = :clan_id
+   AND platform = :platform
+   AND week_start_utc = :week_start_utc
+   AND scope = :scope
+ ORDER BY rank ASC
+ LIMIT :limit;
+"""
+
+
+async def init_weekly_snapshot_tables(db_path: str) -> None:
+    async with open_db(db_path) as db:
+        await db.execute(SNAPSHOT_META_SQL)
+        await db.execute(SNAPSHOT_ROWS_SQL)
+        await db.execute(SNAPSHOT_INDEX_SQL)
+        await db.commit()
+
+
+async def fetch_weekly_snapshot(
+    db_path: str,
+    clan_id: str,
+    platform: str,
+    week_start_utc_z: str,
+    scope: str,
+    limit: int = 10,
+) -> tuple[list[tuple[str, int]], str | None]:
+    """
+    return: (rows, snapshot_created_at_utc or None)
+
+    - 스냅샷이 없으면 ([], None)
+    - 스냅샷은 있어도 Top10이 비어있을 수 있음(클랜 활동 0) → ([], created_at_utc)
+    """
+    scope = (scope or "total").lower()
+
+    async with open_db(db_path) as con:
+        con.row_factory = aiosqlite.Row
+
+        meta = await _fetchone(
+            con,
+            SQL_SNAPSHOT_META,
+            {
+                "clan_id": clan_id,
+                "platform": platform,
+                "week_start_utc": week_start_utc_z,
+                "scope": scope,
+            },
+        )
+        if not meta:
+            return [], None
+
+        rows = await _fetchall(
+            con,
+            SQL_SNAPSHOT_ROWS,
+            {
+                "clan_id": clan_id,
+                "platform": platform,
+                "week_start_utc": week_start_utc_z,
+                "scope": scope,
+                "limit": limit,
+            },
+        )
+
+        out = [(r["player_name"], int(r["kills"])) for r in rows]
+        return out, str(meta["created_at_utc"])
