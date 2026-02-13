@@ -282,7 +282,7 @@ def _flush_pending(con, pending: List[Tuple[str, str, str, int, int, int, List[T
 
 async def main() -> None:
     if not API_KEY:
-        raise SystemExit("PUBG_API_KEY 환경변수가 비어있음 (.env 또는 환경변수 설정 필요)")
+        raise SystemExit("PUBG_API_KEY is empty (.env 에 PUBG_API_KEY 설정 필요)")
     if not DB_PATH.exists():
         raise SystemExit(f"DB not found: {DB_PATH}")
 
@@ -408,6 +408,15 @@ if __name__ == "__main__":
         print("[STOP] cancelled by user", flush=True)
     except asyncio.CancelledError:
         print("[STOP] cancelled", flush=True)
+    except SystemExit as e:
+        # ✅ PUBG_API_KEY 누락 같은 "조기 종료"도 sync_state에 남겨서 alerts가 감지 가능하게
+        msg = str(e).strip()
+        if msg and msg != "0" and DB_PATH.exists():
+            try:
+                asyncio.run(set_weekly_sync_last_error(str(DB_PATH), f"SystemExit: {msg}"))
+            except Exception:
+                pass
+        raise
     except Exception as e:
         try:
             asyncio.run(set_weekly_sync_last_error(str(DB_PATH), f"{type(e).__name__}: {e}"))

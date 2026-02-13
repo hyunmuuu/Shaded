@@ -8,6 +8,7 @@ from shaded.services.sqlite_conn import open_db
 
 STATE_KEY_WEEKLY_SYNC_UTC_Z = "weekly_sync_last_utc_z"
 STATE_KEY_WEEKLY_SYNC_LAST_ERROR = "weekly_sync_last_error"
+STATE_KEY_WEEKLY_SYNC_LAST_ERROR_NOTIFIED_AT = "weekly_sync_last_error_notified_at"
 
 
 async def init_sync_state(db_path: str) -> None:
@@ -63,10 +64,24 @@ async def get_weekly_sync_last_utc_z(db_path: str) -> Optional[str]:
 
 
 async def set_weekly_sync_last_error(db_path: str, message: str) -> None:
-    # message가 비어있으면 "none"으로 저장해서 /status에서 깔끔하게 표시
     msg = (message or "").strip()
     await _upsert_state(db_path, STATE_KEY_WEEKLY_SYNC_LAST_ERROR, msg)
 
 
 async def get_weekly_sync_last_error(db_path: str) -> Optional[Tuple[str, int]]:
     return await _get_state(db_path, STATE_KEY_WEEKLY_SYNC_LAST_ERROR)
+
+
+async def set_weekly_sync_last_error_notified_at(db_path: str, updated_at: int) -> None:
+    # updated_at(epoch)를 value(TEXT)에 저장
+    await _upsert_state(db_path, STATE_KEY_WEEKLY_SYNC_LAST_ERROR_NOTIFIED_AT, str(int(updated_at)))
+
+
+async def get_weekly_sync_last_error_notified_at(db_path: str) -> int:
+    v = await _get_state(db_path, STATE_KEY_WEEKLY_SYNC_LAST_ERROR_NOTIFIED_AT)
+    if not v:
+        return 0
+    try:
+        return int(v[0])
+    except Exception:
+        return 0

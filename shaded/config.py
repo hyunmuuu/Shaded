@@ -8,6 +8,7 @@ load_dotenv(override=True)
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = ROOT_DIR / "db" / "shaded.db"
 
+
 def _parse_id_list(v: str) -> set[int]:
     v = (v or "").strip()
     if not v:
@@ -19,6 +20,7 @@ def _parse_id_list(v: str) -> set[int]:
             out.add(int(part))
     return out
 
+
 def _resolve_db_path(v: str) -> str:
     v = (v or "").strip()
     if not v:
@@ -26,13 +28,14 @@ def _resolve_db_path(v: str) -> str:
     p = Path(v)
     if p.is_absolute():
         return str(p)
-    # ✅ 상대경로는 프로젝트 루트 기준으로 고정
     return str((ROOT_DIR / p).resolve())
+
 
 def _clean_pubg_key(v: str) -> str:
     v = (v or "").strip()
     v = v.removeprefix("Bearer ").strip()
     return v.strip('"').strip("'")
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -41,6 +44,12 @@ class Settings:
     guild_id: int = int((os.getenv("GUILD_ID", "0") or "0").strip())
     register_role_ids: set[int] = field(
         default_factory=lambda: _parse_id_list(os.getenv("REGISTER_ROLE_IDS", ""))
+    )
+
+    # Alerts
+    alert_channel_id: int = int((os.getenv("ALERT_CHANNEL_ID", "0") or "0").strip())
+    alert_mention_role_ids: set[int] = field(
+        default_factory=lambda: _parse_id_list(os.getenv("ALERT_MENTION_ROLE_IDS", ""))
     )
 
     # PUBG

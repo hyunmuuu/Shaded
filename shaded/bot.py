@@ -12,6 +12,7 @@ EXTENSIONS = [
     "shaded.cogs.leaderboard",
     "shaded.cogs.status",
     "shaded.cogs.sync_now",
+    "shaded.cogs.alerts",
 ]
 
 
@@ -44,7 +45,7 @@ class ShadedBot(commands.Bot):
         else:
             synced = await self.tree.sync()
             print(f"[SYNC] global commands={len(synced)}")
-            
+
     async def on_ready(self):
         print(f"[READY] user={self.user} id={getattr(self.user, 'id', None)}", flush=True)
         print(f"[READY] guilds={len(self.guilds)}", flush=True)
